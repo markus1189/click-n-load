@@ -1,3 +1,4 @@
+{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE FlexibleInstances #-}
@@ -12,8 +13,6 @@
 module Main where
 
 import Control.Monad.Reader ( MonadIO(..) )
-import qualified "cipher-aes" Crypto.Cipher.AES as AES
--- import Crypto.
 import                        Data.ByteString (ByteString)
 import                        Data.ByteString.Base64 (decodeLenient)
 import                        Data.Text (Text)
@@ -36,6 +35,12 @@ import Servant
 import qualified              Text.Hex as Hex
 import qualified Data.List as List
 import qualified Data.Text.IO as TIO
+import Crypto.Error ( maybeCryptoError )
+import Crypto.Cipher.AES ( AES128 )
+import Crypto.Cipher.Types
+    ( BlockCipher(cbcDecrypt), Cipher(cipherInit), makeIV )
+import Data.Maybe (fromJust)
+import Data.Foldable (traverse_)
 
 type ClickAndLoadAPI = "jdcheck.js" :> Get '[PlainText] Text
                   :<|> "flash" :> "addcrypted2" :> ReqBody '[FormUrlEncoded] [(Text, Text)] :> Post '[PlainText] Text
@@ -46,22 +51,36 @@ clickAndLoadAPI = Proxy
 jdcheckHandler :: Handler Text
 jdcheckHandler = pure "jdownloader=true"
 
-addcryptedHandler :: MonadIO m => [(Text, Text)] -> m Text
-addcryptedHandler kvs = do
-  let Just crypted = List.lookup "crypted" kvs
-      Just theKey = Text.takeWhile (/= '\'') . Text.drop 1 . Text.dropWhile (/= '\'') <$> List.lookup "jk" kvs
-      decrypted = decryptCnL theKey (encodeUtf8 crypted)
-  liftIO $ print kvs
-  liftIO . TIO.putStrLn . decodeUtf8 $ decrypted
-  pure ""
+extractSecret :: Text -> Text -- HACKY way to get key from "javascript" function
+extractSecret = Text.takeWhile (/= '\'') . Text.drop 1 . Text.dropWhile (/= '\'')
 
-decryptCnL :: Text -> ByteString -> ByteString
-decryptCnL aesKey payload = r
-  where crypted = decodeLenient payload
-        Just key = Hex.decodeHex aesKey
-        aes = AES.initAES key
-        iv = AES.aesIV_ key
-        r = AES.decryptCBC aes iv crypted
+addcryptedHandler :: MonadIO m => [(Text, Text)] -> m Text
+addcryptedHandler kvs =
+  liftIO $ case decrypted of
+    Nothing -> do
+      print kvs
+      pure "Failed to decrypt"
+    Just result -> do
+      putStrLn ("START" <> replicate 75 '=')
+      traverse_ (TIO.putStrLn . ("Package:   " <>)) (List.lookup "package" kvs)
+      traverse_ (TIO.putStrLn . ("Passwords: " <>)) (List.lookup "passwords" kvs)
+      putStrLn (replicate 80 '-')
+      TIO.putStrLn . decodeUtf8 $ result
+      putStrLn ("END" <> replicate 77 '=')
+      pure ""
+  where
+    decrypted = do
+      crypted <- List.lookup "crypted" kvs
+      key <- extractSecret <$> List.lookup "jk" kvs
+      decryptClickAndLoad key (encodeUtf8 crypted)
+
+decryptClickAndLoad :: Text -> ByteString -> Maybe ByteString
+decryptClickAndLoad secret payload = do
+  let key = fromJust (Hex.decodeHex secret)
+      crypted = decodeLenient payload
+  cipher <- maybeCryptoError $ cipherInit @AES128 @ByteString key
+  iv <- makeIV @ByteString @AES128 key
+  pure $ cbcDecrypt cipher iv crypted
 
 server :: Server ClickAndLoadAPI
 server = jdcheckHandler :<|> addcryptedHandler
@@ -69,8 +88,8 @@ server = jdcheckHandler :<|> addcryptedHandler
 app :: Application
 app = serve clickAndLoadAPI server
 
+appPort :: Int
+appPort = 9666
+
 main :: IO ()
-main = do
-  let port = 9666
-  putStrLn $ " Listening on localhost:" <> show port
-  run port app
+main = run appPort app
