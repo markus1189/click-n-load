@@ -4,9 +4,12 @@ with pkgs;
 let
   myHaskellPackages = ps:
     with ps; [
-      servant-server
       base64-bytestring
+      either
       hex-text
+      language-javascript
+      lens
+      servant-server
     ];
   myGhc = haskellPackages.ghcWithHoogle myHaskellPackages;
 in

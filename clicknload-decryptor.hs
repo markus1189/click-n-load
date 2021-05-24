@@ -12,6 +12,7 @@
 
 module Main where
 
+import qualified Language.JavaScript.Parser as JS
 import Control.Monad.Reader ( MonadIO(..) )
 import                        Data.ByteString (ByteString)
 import                        Data.ByteString.Base64 (decodeLenient)
@@ -41,6 +42,8 @@ import Crypto.Cipher.Types
     ( BlockCipher(cbcDecrypt), Cipher(cipherInit), makeIV )
 import Data.Maybe (fromJust)
 import Data.Foldable (traverse_)
+import Language.JavaScript.Parser (JSAST(JSAstProgram), JSStatement (JSFunction, JSReturn), JSExpression (JSStringLiteral))
+import Language.JavaScript.Parser.AST (JSBlock(JSBlock))
 
 type ClickAndLoadAPI = "jdcheck.js" :> Get '[PlainText] Text
                   :<|> "flash" :> "addcrypted2" :> ReqBody '[FormUrlEncoded] [(Text, Text)] :> Post '[PlainText] Text
@@ -51,8 +54,12 @@ clickAndLoadAPI = Proxy
 jdcheckHandler :: Handler Text
 jdcheckHandler = pure "jdownloader=true"
 
-extractSecret :: Text -> Text -- HACKY way to get key from "javascript" function
-extractSecret = Text.takeWhile (/= '\'') . Text.drop 1 . Text.dropWhile (/= '\'')
+extractSecret :: Text -> Maybe Text -- HACKY way to get key from "javascript" function
+extractSecret input = case js of
+  JSAstProgram [JSFunction _ _ _ _ _ (JSBlock _ [JSReturn _ (Just (JSStringLiteral _ str)) _] _) _] _ ->
+    pure . Text.pack . filter (/= '\'') $ str
+  _ -> Nothing
+  where js = JS.readJs (Text.unpack input)
 
 addcryptedHandler :: MonadIO m => [(Text, Text)] -> m Text
 addcryptedHandler kvs =
@@ -64,14 +71,17 @@ addcryptedHandler kvs =
       putStrLn ("START" <> replicate 75 '=')
       traverse_ (TIO.putStrLn . ("Package:   " <>)) (List.lookup "package" kvs)
       traverse_ (TIO.putStrLn . ("Passwords: " <>)) (List.lookup "passwords" kvs)
+      traverse_ (TIO.putStrLn . ("jk:        " <>)) (List.lookup "jk" kvs)
+      traverse_ (TIO.putStrLn . ("secret:    " <>)) secret
       putStrLn (replicate 80 '-')
       TIO.putStrLn . decodeUtf8 $ result
       putStrLn ("END" <> replicate 77 '=')
       pure ""
   where
+    secret = List.lookup "jk" kvs >>= extractSecret
     decrypted = do
       crypted <- List.lookup "crypted" kvs
-      key <- extractSecret <$> List.lookup "jk" kvs
+      key <- secret
       decryptClickAndLoad key (encodeUtf8 crypted)
 
 decryptClickAndLoad :: Text -> ByteString -> Maybe ByteString
