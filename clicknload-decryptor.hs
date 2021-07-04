@@ -47,6 +47,7 @@ import Language.JavaScript.Parser.AST (JSBlock(JSBlock))
 
 type ClickAndLoadAPI = "jdcheck.js" :> Get '[PlainText] Text
                   :<|> "flash" :> "addcrypted2" :> ReqBody '[FormUrlEncoded] [(Text, Text)] :> Post '[PlainText] Text
+                  :<|> "flash" :> "add" :> ReqBody '[FormUrlEncoded] [(Text, Text)] :> Post '[PlainText] Text
 
 clickAndLoadAPI :: Proxy ClickAndLoadAPI
 clickAndLoadAPI = Proxy
@@ -65,7 +66,9 @@ addcryptedHandler :: MonadIO m => [(Text, Text)] -> m Text
 addcryptedHandler kvs =
   liftIO $ case decrypted of
     Nothing -> do
+      putStrLn (replicate 75 '!')
       print kvs
+      putStrLn (replicate 75 '!')
       pure "Failed to decrypt"
     Just result -> do
       putStrLn ("START" <> replicate 75 '=')
@@ -84,6 +87,15 @@ addcryptedHandler kvs =
       key <- secret
       decryptClickAndLoad key (encodeUtf8 crypted)
 
+addHandler :: MonadIO m => [(Text, Text)] -> m Text
+addHandler kvs = liftIO $ do
+  putStrLn ("START" <> replicate 75 '=')
+  traverse_ (TIO.putStrLn . ("Source: " <>)) (List.lookup "source" kvs)
+  putStrLn ("END" <> replicate 10 '-')
+  traverse_ (traverse_ TIO.putStrLn . Text.words) (List.lookup "urls" kvs)
+  putStrLn ("END" <> replicate 77 '=')
+  pure ""
+
 decryptClickAndLoad :: Text -> ByteString -> Maybe ByteString
 decryptClickAndLoad secret payload = do
   let key = fromJust (Hex.decodeHex secret)
@@ -93,7 +105,7 @@ decryptClickAndLoad secret payload = do
   pure $ cbcDecrypt cipher iv crypted
 
 server :: Server ClickAndLoadAPI
-server = jdcheckHandler :<|> addcryptedHandler
+server = jdcheckHandler :<|> addcryptedHandler :<|> addHandler
 
 app :: Application
 app = serve clickAndLoadAPI server
@@ -102,4 +114,4 @@ appPort :: Int
 appPort = 9666
 
 main :: IO ()
-main = run appPort app
+main = putStrLn ("Click'n'Load Decryptor on port " <> show appPort) >> run appPort app
