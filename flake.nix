@@ -21,7 +21,7 @@
           ${myGhc}/bin/runhaskell ${./clicknload-decryptor.hs}
         '';
       in {
-        defaultApp = clickNLoad;
+        defaultPackage = clickNLoad;
 
         devShell = with pkgs;
           pkgs.mkShell {
